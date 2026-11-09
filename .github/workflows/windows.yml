@@ -1,0 +1,59 @@
+name: Windows CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Pure-JVM tests only: no Android SDK needed, no sound device needed.
+      - name: Unit tests (core, export, shared UI math, desktop app)
+        run: >
+          ./gradlew
+          :core-model:test :core-music:test :core-audio-engine:test :export:test
+          :ui-shared:desktopTest :app-desktop:test
+          --stacktrace
+
+      # Portable build first: needs no WiX, so you always get something to download.
+      - name: Portable zip (app image)
+        run: ./gradlew :app-desktop:portableZip --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PianoRollStudio-windows-portable
+          path: app-desktop/build/portable/*.zip
+          if-no-files-found: error
+
+      # Installers need WiX (preinstalled on windows-latest). A failure here must not hide the portable zip.
+      - name: MSI + EXE installers
+        continue-on-error: true
+        run: ./gradlew :app-desktop:packageMsi :app-desktop:packageExe --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PianoRollStudio-windows-installers
+          path: |
+            app-desktop/build/compose/binaries/main/msi/*.msi
+            app-desktop/build/compose/binaries/main/exe/*.exe
+          if-no-files-found: warn
+
+      - name: Test reports (only when something failed)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-reports
+          path: |
+            **/build/reports/tests/**
+          if-no-files-found: ignore
